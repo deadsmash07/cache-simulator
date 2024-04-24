@@ -1,0 +1,25 @@
+Method,MatrixSize,TimeInMicroseconds
+Extra Array,4,3
+In-place,4,2
+Extra Array,16,2
+In-place,16,2
+Extra Array,25,2
+In-place,25,2
+Extra Array,32,3
+In-place,32,2
+Extra Array,45,5
+In-place,45,3
+Extra Array,64,7
+In-place,64,6
+Extra Array,84,10
+In-place,84,8
+Extra Array,96,13
+In-place,96,11
+Extra Array,110,18
+In-place,110,14
+Extra Array,128,23
+In-place,128,17
+Extra Array,256,181
+In-place,256,69
+Extra Array,512,1919
+In-place,512,908

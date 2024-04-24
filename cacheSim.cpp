@@ -1,8 +1,9 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <queue>
+#include <fstream>
 
-// Define cache line structure
 struct CacheLine
 {
     bool valid = false;
@@ -14,16 +15,30 @@ struct CacheLine
 class CacheSimulator
 {
 public:
+    std::vector<std::queue<int>> fifoQueues; // FIFO queues for each set
+    std::vector<std::vector<CacheLine>> cache;
+    int sets, blocksPerSet, blockSize;
+    bool writeAllocate, writeBack, useLRU;
+    int loadHits, loadMisses, storeHits, storeMisses, totalCycles;
+    const int memoryAccessCycles = 100; // Assumed penalty for memory access on misses
+    // modifying the penalty for clocj
+
     CacheSimulator(int numSets, int numBlocks, int blockSize, bool writeAlloc, bool writeBack, bool lru)
         : sets(numSets), blocksPerSet(numBlocks), blockSize(blockSize),
           writeAllocate(writeAlloc), writeBack(writeBack), useLRU(lru)
     {
-        // Initialize each set
         cache.resize(sets, std::vector<CacheLine>(blocksPerSet));
+        fifoQueues.resize(sets);
+        for (int i = 0; i < sets; ++i)
+        {
+            for (int j = 0; j < blocksPerSet; ++j)
+            {
+                fifoQueues[i].push(j);
+            }
+        }
         loadHits = loadMisses = storeHits = storeMisses = totalCycles = 0;
     }
 
-    // Process a memory access
     void processAccess(char type, unsigned long address)
     {
         unsigned long blockAddress = address / blockSize;
@@ -32,34 +47,21 @@ public:
 
         bool hit = false;
         int freeIndex = -1;
-        int lruIndex = 0; // Index for least recently used block
+        int lruIndex = 0;
+        int replaceIndex = -1;
 
-        // Check all blocks in the set for a hit
         for (int i = 0; i < blocksPerSet; ++i)
         {
             if (cache[setIndex][i].valid && cache[setIndex][i].tag == tag)
             {
                 hit = true;
                 if (useLRU)
-                {
-                    cache[setIndex][i].lastUsed = totalCycles;
-                }
-                if (type == 's')
-                {
-                    if (writeBack)
-                    {
-                        cache[setIndex][i].dirty = true;
-                    }
-                    else
-                    { // If write-through, also "write to memory"
-                        totalCycles += memoryAccessCycles;
-                    }
-                }
+                    cache[setIndex][i].lastUsed = totalCycles; // Update usage time for LRU
                 break;
             }
             if (!cache[setIndex][i].valid && freeIndex == -1)
             {
-                freeIndex = i; // Save first free block index
+                freeIndex = i;
             }
             if (useLRU && cache[setIndex][lruIndex].lastUsed > cache[setIndex][i].lastUsed)
             {
@@ -67,35 +69,87 @@ public:
             }
         }
 
-        // Miss handling
         if (!hit)
         {
-            if (type == 'l' || (type == 's' && writeAllocate))
+            if (freeIndex != -1)
             {
-                int replaceIndex = (freeIndex != -1) ? freeIndex : lruIndex;
-                if (cache[setIndex][replaceIndex].valid && writeBack && cache[setIndex][replaceIndex].dirty)
-                {
-                    // Write back dirty block to memory
-                    totalCycles += memoryAccessCycles;
-                }
-                cache[setIndex][replaceIndex].valid = true;
-                cache[setIndex][replaceIndex].tag = tag;
-                cache[setIndex][replaceIndex].dirty = (type == 's');
-                if (useLRU)
-                {
-                    cache[setIndex][replaceIndex].lastUsed = totalCycles;
-                }
-                totalCycles += memoryAccessCycles; // Memory access for loading the block
+                replaceIndex = freeIndex;
             }
-            else if (type == 's')
+            else if (useLRU)
             {
-                // Write directly to memory (no-write-allocate)
-                totalCycles += memoryAccessCycles;
+                replaceIndex = lruIndex;
             }
+            else
+            {
+                replaceIndex = fifoQueues[setIndex].front();
+                fifoQueues[setIndex].pop();
+                fifoQueues[setIndex].push(replaceIndex);
+            }
+
+            if (cache[setIndex][replaceIndex].valid && writeBack && cache[setIndex][replaceIndex].dirty)
+            {
+                totalCycles += 100*(blockSize/4); // Write back dirty block
+            }
+            cache[setIndex][replaceIndex].valid = true;
+            cache[setIndex][replaceIndex].tag = tag;
+            cache[setIndex][replaceIndex].dirty = (type == 's');
+            if (useLRU)
+                cache[setIndex][replaceIndex].lastUsed = totalCycles; // Update usage time for LRU
+            totalCycles += 100*(blockSize/4);                        // Memory access for loading the block
+        }
+        if( type== 's' && hit && ! writeBack){
+            totalCycles += 100; // store hit takes 100 cycles
         }
 
-        // Update the statistics
         updateStatistics(type, hit);
+    }
+
+    void updateStatistics(char type, bool hit, unsigned long setIndex = -1, int replaceIndex = -1)
+    {
+        if (type == 'l')
+        {
+            if (hit){
+                loadHits++;
+                totalCycles += 1;} // load hit takes 1 cycle
+            else{
+                loadMisses++;
+                }// load miss takes 100 cycles
+        }
+        else if (type == 's')
+        {
+            if (hit){
+                storeHits++;
+                if (writeBack){
+                    totalCycles += 1;} // store hit takes 1 cycle
+                // else{
+                //     totalCycles += 100; // store hit takes 100 cycles
+                // }
+              }
+
+            else{ // store miss
+                storeMisses++;
+                // if(writeBack){
+                //     if(writeAllocate){
+                //         totalCycles += 100*blockSizeInWords; // store miss takes 100 cycles
+                //         if(cache[setIndex][replaceIndex].valid && cache[setIndex][replaceIndex].dirty){
+                //             totalCycles += 100*blockSizeInWords; // write back dirty block
+                //         }
+                //     }
+                // }
+                // else{
+                //     if(writeAllocate){
+                //         totalCycles += 100*blockSizeInWords; // store miss takes 100 cycles
+                //     }
+                //     totalCycles += 100; // store miss takes 100 cycles
+                // }
+                if( ! writeBack && !writeAllocate){
+                    totalCycles += 100; // store miss takes 100 cycles
+                }
+                
+               
+            }
+        }
+        totalCycles += 1; // 1 cycle for processing the access
     }
 
     void printSummary()
@@ -107,42 +161,19 @@ public:
         std::cout << "Store hits: " << storeHits << std::endl;
         std::cout << "Store misses: " << storeMisses << std::endl;
         std::cout << "Total cycles: " << totalCycles << std::endl;
-    }
 
-private:
-    void updateStatistics(char type, bool hit)
-    {
-        if (type == 'l')
-        {
-            if (hit)
-            {
-                loadHits++;
-            }
-            else
-            {
-                loadMisses++;
-            }
-        }
-        else if (type == 's')
-        {
-            if (hit)
-            {
-                storeHits++;
-            }
-            else
-            {
-                storeMisses++;
-            }
-        }
-        // Assuming 1 cycle per cache access, regardless of hit or miss.
-        totalCycles += 1;
-    }
+        // Now write the same summary to a file
+        std::ofstream outf("out.txt"); // Note that 'fstream' is not required here, 'ofstream' is sufficient.
 
-    int sets, blocksPerSet, blockSize;
-    bool writeAllocate, writeBack, useLRU;
-    std::vector<std::vector<CacheLine>> cache;
-    int loadHits, loadMisses, storeHits, storeMisses, totalCycles;
-    const int memoryAccessCycles = 100; // Assumed penalty for memory access on misses
+        outf << loadHits + loadMisses << std::endl;
+        outf  << storeHits + storeMisses << std::endl;
+        outf  << loadHits << std::endl;
+        outf << loadMisses << std::endl;
+        outf << storeHits << std::endl;
+        outf  << storeMisses << std::endl;
+        outf  << totalCycles << std::endl;
+        outf.close();
+    }
 };
 
 int main(int argc, char *argv[])
@@ -171,6 +202,7 @@ int main(int argc, char *argv[])
     }
 
     sim.printSummary();
+
 
     return 0;
 }
